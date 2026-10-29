@@ -163,3 +163,27 @@ h1 { font-size: clamp(30px, 5vw, 42px); font-weight: 600; line-height: 1.1; }
   .acciones { flex-direction: column-reverse; }
   .acciones button { width: 100%; }
 }
+
+/* ---------- Acceso, negocio y sesión ---------- */
+.centro { min-height: 100vh; display: grid; place-items: center; padding: 16px; color: var(--suave); }
+.panel-auth {
+  width: 100%; max-width: 420px; background: var(--panel); border: 1px solid var(--oro);
+  padding: 28px 24px; display: flex; flex-direction: column; gap: 14px; color: var(--texto);
+}
+.panel-auth h2 { font-size: 30px; font-weight: 600; color: var(--oro-claro); }
+.panel-auth p { color: var(--suave); font-size: 14px; }
+.panel-auth form { display: flex; flex-direction: column; gap: 14px; }
+.panel-auth .nota { margin-bottom: 0; }
+.enlace-texto {
+  background: none; border: none; color: var(--oro-claro); text-decoration: underline;
+  text-align: left; padding: 6px 0; min-height: 40px; font-size: 14px;
+}
+.negocio span { word-break: break-all; }
+.boton-oro:disabled { opacity: 0.6; cursor: wait; }
+
+/* ---------- Diagnóstico ---------- */
+.alerta {
+  background: var(--panel-2); border-left: 3px solid #d9826f; color: var(--texto);
+  padding: 12px 14px; margin-bottom: 20px; font-size: 14px; word-break: break-word;
+}
+.version { color: var(--suave); font-size: 12px; margin-top: 6px; }
