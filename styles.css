@@ -187,3 +187,45 @@ h1 { font-size: clamp(30px, 5vw, 42px); font-weight: 600; line-height: 1.1; }
   padding: 12px 14px; margin-bottom: 20px; font-size: 14px; word-break: break-word;
 }
 .version { color: var(--suave); font-size: 12px; margin-top: 6px; }
+
+/* ---------- Sección Citas ---------- */
+.filtros { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-bottom: 20px; }
+.filtros .campo { flex: 1 1 160px; }
+.atajos { display: flex; flex-wrap: wrap; gap: 8px; }
+.resumen { color: var(--suave); font-size: 14px; margin: -6px 0 14px; }
+.cita time small { display: block; font-family: "Manrope", system-ui, sans-serif; font-size: 11px; color: var(--suave); font-weight: 500; }
+.cita .botones { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; }
+.mini {
+  background: none; border: 1px solid var(--linea); color: var(--texto);
+  padding: 8px 14px; min-height: 40px; font-size: 14px; font-weight: 600;
+}
+.mini:hover:not(:disabled) { border-color: var(--oro); }
+.mini:disabled { opacity: 0.6; cursor: wait; }
+.mini.peligro { color: #f0a090; }
+.mini.peligro:hover:not(:disabled) { border-color: #d9826f; }
+.boton-peligro { background: #a94438; color: #fff; }
+.boton-peligro:hover:not(:disabled) { background: #c4604d; }
+
+/* ---------- Sección Clientes ---------- */
+.campo textarea {
+  width: 100%; min-height: 90px; padding: 10px 12px; font: inherit; font-size: 16px; resize: vertical;
+  background: var(--fondo); color: var(--texto); border: 1px solid var(--linea); border-radius: 0;
+}
+.campo textarea:focus { outline: 2px solid var(--oro-claro); outline-offset: 0; border-color: var(--oro); }
+.lista-clientes { list-style: none; padding: 0; display: grid; gap: 10px; }
+.cliente {
+  display: grid; grid-template-columns: 48px 1fr; gap: 12px; align-items: center;
+  background: var(--panel); border: 1px solid var(--linea); padding: 14px 16px;
+}
+.avatar {
+  width: 44px; height: 44px; display: grid; place-items: center;
+  border: 1px solid var(--oro); color: var(--oro-claro);
+  font-family: "Cormorant Garamond", Georgia, serif; font-size: 24px; font-weight: 600;
+}
+.cliente .botones { grid-column: 1 / -1; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.modal.ancho { max-width: 640px; }
+.ficha { color: var(--suave); font-size: 14px; margin-bottom: 12px; }
+.resumen-cliente { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 14px 0 18px; }
+.dato { background: var(--panel-2); border: 1px solid var(--linea); padding: 12px; display: flex; flex-direction: column; }
+.dato strong { font-family: "Cormorant Garamond", Georgia, serif; font-size: 22px; color: var(--oro-claro); font-weight: 600; word-break: break-word; }
+.dato span { font-size: 12px; color: var(--suave); }

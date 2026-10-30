@@ -28,6 +28,9 @@ export interface Servicio {
 export interface Cliente {
   id: string;
   nombre: string;
+  telefono?: string | null; // solo dígitos, p. ej. 3001234567
+  notas?: string | null;
+  creado_en?: string;
 }
 
 export const estados: Estado[] = ["Pendiente", "Confirmada", "En curso", "Completada"];
@@ -62,3 +65,19 @@ export function Campo({ etiqueta, error, children }: { etiqueta: string; error?:
     </label>
   );
 }
+
+// Minúsculas y sin tildes, para buscar sin importar cómo se escriba.
+export const sinTildes = (t: string) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+// "+57 300 123 4567" -> "3001234567"
+export const normalizarTelefono = (t: string): string => {
+  let d = t.replace(/\D/g, "");
+  if (d.length === 12 && d.startsWith("57")) d = d.slice(2);
+  return d;
+};
+
+// Celular colombiano: 10 dígitos que empiezan por 3.
+export const telefonoValido = (d: string) => /^3\d{9}$/.test(d);
+
+export const formatearTelefono = (d: string | null | undefined): string =>
+  d && d.length === 10 ? `${d.slice(0, 3)} ${d.slice(3, 6)} ${d.slice(6)}` : d ?? "";

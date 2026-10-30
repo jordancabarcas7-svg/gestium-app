@@ -3,6 +3,14 @@ import type { Session } from "@supabase/supabase-js";
 import { supabase, supabaseConfigurado } from "./supabase";
 import { Campo, cop, hoyISO, type Cita, type Cliente, type Estado, type Profesional, type Servicio } from "./comun";
 import { ConfirmarEliminar, FormularioCita, SeccionCitas } from "./Citas";
+import {
+  ConfirmarEliminarCliente,
+  DetalleCliente,
+  FormularioCliente,
+  SeccionClientes,
+  citasDeCliente,
+  type DatosCliente,
+} from "./Clientes";
 
 type Seccion = "Inicio" | "Citas" | "Clientes" | "Profesionales" | "Servicios" | "Caja" | "Reportes";
 
@@ -38,7 +46,7 @@ const servicios = [
   { nombre: "Uñas acrílicas", precio: 90000 },
 ];
 
-const VERSION = "v0.4 (Citas)";
+const VERSION = "v0.5 (Clientes)";
 const CLAVE_ALMACEN = "gestium_citas_v1";
 const INGRESOS_BASE = 1_280_000; // dato ficticio
 const GASTOS = 410_000; // dato ficticio
@@ -117,6 +125,12 @@ export default function App() {
   const [catProf, setCatProf] = useState<Profesional[]>([]);
   const [catServ, setCatServ] = useState<Servicio[]>([]);
   const [catCli, setCatCli] = useState<Cliente[]>([]);
+  const [cargandoClientes, setCargandoClientes] = useState(false);
+  const [errorClientes, setErrorClientes] = useState("");
+  const [formCliente, setFormCliente] = useState(false);
+  const [clienteEditando, setClienteEditando] = useState<Cliente | null>(null);
+  const [clienteViendo, setClienteViendo] = useState<Cliente | null>(null);
+  const [clienteEliminando, setClienteEliminando] = useState<Cliente | null>(null);
 
   const usuarioId = sesion?.user.id;
   const modoNube = supabaseConfigurado && !modoPrueba && Boolean(sesion) && Boolean(negocio);
@@ -197,30 +211,54 @@ export default function App() {
     void recargarCitas();
   }, [recargarCitas]);
 
-  // Catálogos reales: profesionales, servicios y clientes del negocio
+  // Clientes reales del negocio (con teléfono y notas)
+  const recargarClientes = useCallback(async () => {
+    if (!negocioId) {
+      setCatCli([]);
+      return;
+    }
+    setCargandoClientes(true);
+    const { data, error } = await supabase
+      .from("clientes")
+      .select("id, nombre, telefono, notas, creado_en")
+      .eq("negocio_id", negocioId)
+      .order("nombre");
+    setCargandoClientes(false);
+    if (error) {
+      const texto = "No se pudieron cargar los clientes: " + error.message;
+      setErrorClientes(texto);
+      setMensaje(texto);
+      return;
+    }
+    setErrorClientes("");
+    setCatCli((data ?? []) as unknown as Cliente[]);
+  }, [negocioId]);
+
+  useEffect(() => {
+    void recargarClientes();
+  }, [recargarClientes]);
+
+  // Catálogos reales: profesionales y servicios del negocio
   useEffect(() => {
     if (!negocioId) {
       setCatProf([]);
       setCatServ([]);
-      setCatCli([]);
       return;
     }
     let cancelado = false;
     void (async () => {
-      const [p, s, c] = await Promise.all([
+      const [p, s] = await Promise.all([
         supabase.from("profesionales").select("id, nombre").eq("negocio_id", negocioId).order("nombre"),
         supabase.from("servicios").select("id, nombre, precio").eq("negocio_id", negocioId).order("nombre"),
-        supabase.from("clientes").select("id, nombre").eq("negocio_id", negocioId).order("nombre"),
       ]);
       if (cancelado) return;
-      const err = p.error ?? s.error ?? c.error;
+      const err = p.error ?? s.error;
       if (err) {
-        setMensaje("No se pudieron cargar profesionales, servicios o clientes: " + err.message);
+        setMensaje("No se pudieron cargar profesionales o servicios: " + err.message);
         return;
       }
       setCatProf((p.data ?? []) as unknown as Profesional[]);
       setCatServ((s.data ?? []) as unknown as Servicio[]);
-      setCatCli((c.data ?? []) as unknown as Cliente[]);
     })();
     return () => {
       cancelado = true;
@@ -336,6 +374,95 @@ export default function App() {
     return null;
   };
 
+  const cerrarFormCliente = () => {
+    setFormCliente(false);
+    setClienteEditando(null);
+  };
+
+  const textoErrorCliente = (error: { code?: string; message: string } | null): string => {
+    if (!error) return "Supabase no devolvió el cliente.";
+    if (error.code === "23505") return "Ya existe un cliente con ese teléfono en tu negocio.";
+    if (error.code === "23514") return "El teléfono debe ser un celular colombiano de 10 dígitos que empiece por 3.";
+    return error.message;
+  };
+
+  // Crea o edita un cliente. Devuelve null si todo salió bien, o el texto del error.
+  const guardarCliente = async (d: DatosCliente, editarId?: string): Promise<string | null> => {
+    if (!negocio) return "No hay un negocio activo.";
+    try {
+      if (editarId) {
+        const previo = catCli.find((x) => x.id === editarId);
+        const { data, error } = await supabase
+          .from("clientes")
+          .update({ nombre: d.nombre, telefono: d.telefono, notas: d.notas })
+          .eq("id", editarId)
+          .eq("negocio_id", negocio.id)
+          .select()
+          .single();
+        if (error || !data) return textoErrorCliente(error);
+        const actualizado = data as unknown as Cliente;
+        setCatCli((p) => p.map((x) => (x.id === editarId ? actualizado : x)));
+
+        // Mantener las citas coherentes: nombre actualizado y citas antiguas enlazadas a este cliente
+        let aviso = "Cliente actualizado.";
+        const e1 = await supabase
+          .from("citas")
+          .update({ cliente_nombre: actualizado.nombre })
+          .eq("cliente_id", editarId)
+          .eq("negocio_id", negocio.id);
+        let e2: { message: string } | null = null;
+        if (previo) {
+          const r = await supabase
+            .from("citas")
+            .update({ cliente_id: editarId, cliente_nombre: actualizado.nombre })
+            .is("cliente_id", null)
+            .eq("cliente_nombre", previo.nombre)
+            .eq("negocio_id", negocio.id);
+          e2 = r.error;
+        }
+        if (e1.error || e2) aviso = "Cliente actualizado, pero no se pudieron actualizar sus citas.";
+        setMensaje(aviso);
+        void recargarCitas();
+      } else {
+        const { data, error } = await supabase
+          .from("clientes")
+          .insert({ negocio_id: negocio.id, nombre: d.nombre, telefono: d.telefono, notas: d.notas })
+          .select()
+          .single();
+        if (error || !data) return textoErrorCliente(error);
+        setCatCli((p) => [...p, data as unknown as Cliente]);
+        setMensaje("Cliente guardado en la base de datos.");
+      }
+    } catch (e) {
+      return e instanceof Error ? e.message : "Error desconocido.";
+    }
+    cerrarFormCliente();
+    return null;
+  };
+
+  const eliminarCliente = async (): Promise<string | null> => {
+    if (!clienteEliminando || !negocio) return "No hay un cliente seleccionado.";
+    const id = clienteEliminando.id;
+    const { data, error } = await supabase.from("clientes").delete().eq("id", id).eq("negocio_id", negocio.id).select("id");
+    if (error) return error.message;
+    if (!data || data.length === 0) return "No se eliminó ningún cliente (revisa tus permisos).";
+    setCatCli((p) => p.filter((x) => x.id !== id));
+    setClienteEliminando(null);
+    setMensaje("Cliente eliminado.");
+    void recargarCitas();
+    return null;
+  };
+
+  const enClientes = activa === "Clientes" && modoNube;
+  const accionPrincipal = () => {
+    if (enClientes) {
+      setClienteEditando(null);
+      setFormCliente(true);
+    } else {
+      abrirNueva();
+    }
+  };
+
   if (cargandoSesion) return <Centro>Cargando…</Centro>;
   if (supabaseConfigurado && !modoPrueba) {
     if (!sesion) return <PantallaAcceso onPrueba={() => setModoPrueba(true)} />;
@@ -371,6 +498,36 @@ export default function App() {
           {supabaseConfigurado
             ? "Inicia sesión para ver y gestionar las citas reales de tu negocio."
             : "Esta versión no encontró las variables de Supabase, así que no puede mostrar citas reales."}
+        </p>
+        {supabaseConfigurado && (
+          <button className="boton-oro" style={{ marginTop: 16 }} onClick={() => setModoPrueba(false)}>
+            Iniciar sesión
+          </button>
+        )}
+      </section>
+    );
+  } else if (activa === "Clientes") {
+    contenido = modoNube ? (
+      <SeccionClientes
+        clientes={catCli}
+        citas={nube}
+        cargando={cargandoClientes}
+        error={errorClientes}
+        onVer={(c) => setClienteViendo(c)}
+        onEditar={(c) => {
+          setClienteEditando(c);
+          setFormCliente(true);
+        }}
+        onEliminar={(c) => setClienteEliminando(c)}
+        onActualizar={() => void recargarClientes()}
+      />
+    ) : (
+      <section className="proximamente">
+        <h2>Clientes</h2>
+        <p>
+          {supabaseConfigurado
+            ? "Inicia sesión para ver y gestionar los clientes reales de tu negocio."
+            : "Esta versión no encontró las variables de Supabase, así que no puede mostrar clientes reales."}
         </p>
         {supabaseConfigurado && (
           <button className="boton-oro" style={{ marginTop: 16 }} onClick={() => setModoPrueba(false)}>
@@ -436,8 +593,8 @@ export default function App() {
             <h1>{activa === "Inicio" ? "Buenos días" : activa}</h1>
             <p>{fechaLarga}</p>
           </div>
-          <button className="boton-oro" onClick={abrirNueva}>
-            Nueva cita
+          <button className="boton-oro" onClick={accionPrincipal}>
+            {enClientes ? "Nuevo cliente" : "Nueva cita"}
           </button>
         </header>
 
@@ -459,6 +616,34 @@ export default function App() {
         />
       )}
       {eliminando && <ConfirmarEliminar cita={eliminando} onConfirmar={eliminar} onCancelar={() => setEliminando(null)} />}
+      {formCliente && (
+        <FormularioCliente
+          cliente={clienteEditando}
+          existentes={catCli}
+          onGuardar={(d) => guardarCliente(d, clienteEditando ? clienteEditando.id : undefined)}
+          onCerrar={cerrarFormCliente}
+        />
+      )}
+      {clienteViendo && (
+        <DetalleCliente
+          cliente={clienteViendo}
+          citas={nube}
+          onCerrar={() => setClienteViendo(null)}
+          onEditar={(c) => {
+            setClienteViendo(null);
+            setClienteEditando(c);
+            setFormCliente(true);
+          }}
+        />
+      )}
+      {clienteEliminando && (
+        <ConfirmarEliminarCliente
+          cliente={clienteEliminando}
+          totalCitas={citasDeCliente(clienteEliminando, nube).length}
+          onConfirmar={eliminarCliente}
+          onCancelar={() => setClienteEliminando(null)}
+        />
+      )}
       {mensaje && (
         <div className="aviso-flotante" role="status">
           {mensaje}
