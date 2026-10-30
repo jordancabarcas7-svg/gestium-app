@@ -1,30 +1,10 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase, supabaseConfigurado } from "./supabase";
+import { Campo, cop, hoyISO, type Cita, type Cliente, type Estado, type Profesional, type Servicio } from "./comun";
+import { ConfirmarEliminar, FormularioCita, SeccionCitas } from "./Citas";
 
 type Seccion = "Inicio" | "Citas" | "Clientes" | "Profesionales" | "Servicios" | "Caja" | "Reportes";
-type Estado = "Confirmada" | "Pendiente" | "En curso" | "Completada";
-
-interface Cita {
-  id: string;
-  fecha: string; // AAAA-MM-DD
-  hora: string; // HH:MM
-  cliente: string;
-  servicio: string;
-  profesional: string;
-  precio: number;
-  estado: Estado;
-}
-
-interface Formulario {
-  cliente: string;
-  servicio: string;
-  profesional: string;
-  fecha: string;
-  hora: string;
-  precio: string;
-  estado: Estado;
-}
 
 interface Negocio {
   id: string;
@@ -41,10 +21,13 @@ interface FilaCita {
   profesional_nombre: string;
   precio: number | string;
   estado: Estado;
+  cliente_id: string | null;
+  profesional_id: string | null;
+  servicio_id: string | null;
 }
 
 const secciones: Seccion[] = ["Inicio", "Citas", "Clientes", "Profesionales", "Servicios", "Caja", "Reportes"];
-const estados: Estado[] = ["Pendiente", "Confirmada", "En curso", "Completada"];
+// Listas fijas: solo se usan en el modo de prueba local (sin cuenta).
 const profesionales = ["Camilo", "Valentina", "Mariana", "Esteban"];
 const servicios = [
   { nombre: "Corte clásico", precio: 35000 },
@@ -55,7 +38,7 @@ const servicios = [
   { nombre: "Uñas acrílicas", precio: 90000 },
 ];
 
-const VERSION = "v0.3 (Supabase)";
+const VERSION = "v0.4 (Citas)";
 const CLAVE_ALMACEN = "gestium_citas_v1";
 const INGRESOS_BASE = 1_280_000; // dato ficticio
 const GASTOS = 410_000; // dato ficticio
@@ -64,19 +47,9 @@ const AVISO_LOCAL =
   "Las citas nuevas se guardan solo en este navegador (localStorage). No se comparten entre dispositivos ni entre negocios.";
 const AVISO_NUBE = "Las citas nuevas se guardan en la base de datos de tu negocio.";
 
-const cop = (n: number) =>
-  new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(n);
-
-const hoyISO = () => {
-  const d = new Date();
-  const mes = String(d.getMonth() + 1).padStart(2, "0");
-  const dia = String(d.getDate()).padStart(2, "0");
-  return `${d.getFullYear()}-${mes}-${dia}`;
-};
-
 const nuevoId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
-// Citas de ejemplo: siempre aparecen con la fecha de hoy y NO se guardan.
+// Citas de ejemplo (solo en Inicio): siempre aparecen con la fecha de hoy y NO se guardan.
 const citasDemo = (fecha: string): Cita[] => [
   { id: "d1", fecha, hora: "09:00", cliente: "Andrés Ramírez", servicio: "Corte clásico", profesional: "Camilo", precio: 35000, estado: "En curso" },
   { id: "d2", fecha, hora: "10:00", cliente: "Laura Gómez", servicio: "Manicura semipermanente", profesional: "Valentina", precio: 60000, estado: "Confirmada" },
@@ -106,15 +79,31 @@ const filaACita = (f: FilaCita): Cita => ({
   profesional: f.profesional_nombre,
   precio: Number(f.precio),
   estado: f.estado,
+  clienteId: f.cliente_id,
+  profesionalId: f.profesional_id,
+  servicioId: f.servicio_id,
 });
+
+function buscar<T extends { nombre: string }>(lista: T[], nombre: string): T | undefined {
+  const n = nombre.trim().toLowerCase();
+  return lista.find((x) => x.nombre.trim().toLowerCase() === n);
+}
+
+async function crearFila<T>(tabla: string, fila: Record<string, unknown>, etiqueta: string): Promise<T> {
+  const { data, error } = await supabase.from(tabla).insert(fila).select().single();
+  if (error || !data) throw new Error(`No se pudo crear ${etiqueta}: ${error ? error.message : "sin respuesta"}`);
+  return data as unknown as T;
+}
 
 export default function App() {
   const [activa, setActiva] = useState<Seccion>("Inicio");
   const [menuAbierto, setMenuAbierto] = useState(false);
   const [formAbierto, setFormAbierto] = useState(false);
+  const [editando, setEditando] = useState<Cita | null>(null);
+  const [eliminando, setEliminando] = useState<Cita | null>(null);
   const [mensaje, setMensaje] = useState("");
 
-  // Modo local (localStorage), igual que antes
+  // Modo local (localStorage)
   const [locales, setLocales] = useState<Cita[]>(cargarLocales);
   // Modo nube (Supabase)
   const [modoPrueba, setModoPrueba] = useState(!supabaseConfigurado);
@@ -123,6 +112,11 @@ export default function App() {
   const [negocio, setNegocio] = useState<Negocio | null | undefined>(undefined); // undefined = cargando
   const [errorDatos, setErrorDatos] = useState("");
   const [nube, setNube] = useState<Cita[]>([]);
+  const [cargandoCitas, setCargandoCitas] = useState(false);
+  const [errorCitas, setErrorCitas] = useState("");
+  const [catProf, setCatProf] = useState<Profesional[]>([]);
+  const [catServ, setCatServ] = useState<Servicio[]>([]);
+  const [catCli, setCatCli] = useState<Cliente[]>([]);
 
   const usuarioId = sesion?.user.id;
   const modoNube = supabaseConfigurado && !modoPrueba && Boolean(sesion) && Boolean(negocio);
@@ -174,23 +168,60 @@ export default function App() {
   }, [cargarNegocio]);
 
   const negocioId = negocio ? negocio.id : undefined;
-  useEffect(() => {
+
+  // Citas reales del negocio del usuario (la base de datos, con RLS, solo devuelve las suyas)
+  const recargarCitas = useCallback(async () => {
     if (!negocioId) {
       setNube([]);
       return;
     }
-    let cancelado = false;
-    supabase
+    setCargandoCitas(true);
+    const { data, error } = await supabase
       .from("citas")
       .select("*")
       .eq("negocio_id", negocioId)
       .order("fecha")
-      .order("hora")
-      .then(({ data, error }) => {
-        if (cancelado) return;
-        if (error) setMensaje("No se pudieron cargar las citas: " + error.message);
-        else setNube(((data ?? []) as unknown as FilaCita[]).map(filaACita));
-      });
+      .order("hora");
+    setCargandoCitas(false);
+    if (error) {
+      const texto = "No se pudieron cargar las citas: " + error.message;
+      setErrorCitas(texto);
+      setMensaje(texto);
+      return;
+    }
+    setErrorCitas("");
+    setNube(((data ?? []) as unknown as FilaCita[]).map(filaACita));
+  }, [negocioId]);
+
+  useEffect(() => {
+    void recargarCitas();
+  }, [recargarCitas]);
+
+  // Catálogos reales: profesionales, servicios y clientes del negocio
+  useEffect(() => {
+    if (!negocioId) {
+      setCatProf([]);
+      setCatServ([]);
+      setCatCli([]);
+      return;
+    }
+    let cancelado = false;
+    void (async () => {
+      const [p, s, c] = await Promise.all([
+        supabase.from("profesionales").select("id, nombre").eq("negocio_id", negocioId).order("nombre"),
+        supabase.from("servicios").select("id, nombre, precio").eq("negocio_id", negocioId).order("nombre"),
+        supabase.from("clientes").select("id, nombre").eq("negocio_id", negocioId).order("nombre"),
+      ]);
+      if (cancelado) return;
+      const err = p.error ?? s.error ?? c.error;
+      if (err) {
+        setMensaje("No se pudieron cargar profesionales, servicios o clientes: " + err.message);
+        return;
+      }
+      setCatProf((p.data ?? []) as unknown as Profesional[]);
+      setCatServ((s.data ?? []) as unknown as Servicio[]);
+      setCatCli((c.data ?? []) as unknown as Cliente[]);
+    })();
     return () => {
       cancelado = true;
     };
@@ -207,37 +238,101 @@ export default function App() {
     setMenuAbierto(false);
   };
 
+  const abrirNueva = () => {
+    setEditando(null);
+    setFormAbierto(true);
+  };
+
+  const cerrarForm = () => {
+    setFormAbierto(false);
+    setEditando(null);
+  };
+
   const cerrarSesion = async () => {
     await supabase.auth.signOut();
     setNube([]);
     setNegocio(undefined);
   };
 
-  // Devuelve null si todo salió bien, o el texto del error.
-  const guardar = async (c: Omit<Cita, "id">): Promise<string | null> => {
+  // Crea o edita una cita. Devuelve null si todo salió bien, o el texto del error.
+  const guardar = async (c: Omit<Cita, "id">, editarId?: string): Promise<string | null> => {
     if (modoNube && negocio) {
-      const { data, error } = await supabase
-        .from("citas")
-        .insert({
-          negocio_id: negocio.id,
+      try {
+        // 1) Resolver (o crear) profesional, servicio y cliente reales de ESTE negocio
+        let prof = buscar(catProf, c.profesional);
+        if (!prof) {
+          const nuevo = await crearFila<Profesional>("profesionales", { negocio_id: negocio.id, nombre: c.profesional }, "el profesional");
+          setCatProf((p) => [...p, nuevo]);
+          prof = nuevo;
+        }
+        let serv = buscar(catServ, c.servicio);
+        if (!serv) {
+          const nuevo = await crearFila<Servicio>("servicios", { negocio_id: negocio.id, nombre: c.servicio, precio: c.precio }, "el servicio");
+          setCatServ((p) => [...p, nuevo]);
+          serv = nuevo;
+        }
+        let cli = buscar(catCli, c.cliente);
+        if (!cli) {
+          const nuevo = await crearFila<Cliente>("clientes", { negocio_id: negocio.id, nombre: c.cliente }, "el cliente");
+          setCatCli((p) => [...p, nuevo]);
+          cli = nuevo;
+        }
+
+        // 2) Guardar la cita con sus tres relaciones
+        const datos = {
           fecha: c.fecha,
           hora: c.hora,
-          cliente_nombre: c.cliente,
-          servicio_nombre: c.servicio,
-          profesional_nombre: c.profesional,
+          cliente_nombre: cli.nombre,
+          servicio_nombre: serv.nombre,
+          profesional_nombre: prof.nombre,
           precio: c.precio,
           estado: c.estado,
-        })
-        .select()
-        .single();
-      if (error || !data) return error ? error.message : "Supabase no devolvió la cita guardada.";
-      setNube((p) => [...p, filaACita(data as unknown as FilaCita)]);
-      setMensaje("Cita guardada en la base de datos.");
+          cliente_id: cli.id,
+          profesional_id: prof.id,
+          servicio_id: serv.id,
+        };
+        if (editarId) {
+          const { data, error } = await supabase
+            .from("citas")
+            .update(datos)
+            .eq("id", editarId)
+            .eq("negocio_id", negocio.id)
+            .select()
+            .single();
+          if (error || !data) return error ? error.message : "Supabase no devolvió la cita actualizada.";
+          const actualizada = filaACita(data as unknown as FilaCita);
+          setNube((p) => p.map((x) => (x.id === editarId ? actualizada : x)));
+          setMensaje("Cita actualizada.");
+        } else {
+          const { data, error } = await supabase
+            .from("citas")
+            .insert({ negocio_id: negocio.id, ...datos })
+            .select()
+            .single();
+          if (error || !data) return error ? error.message : "Supabase no devolvió la cita guardada.";
+          setNube((p) => [...p, filaACita(data as unknown as FilaCita)]);
+          setMensaje("Cita guardada en la base de datos.");
+        }
+      } catch (e) {
+        return e instanceof Error ? e.message : "Error desconocido.";
+      }
     } else {
       setLocales((p) => [...p, { ...c, id: nuevoId() }]);
       setMensaje("Cita guardada solo en este navegador.");
     }
-    setFormAbierto(false);
+    cerrarForm();
+    return null;
+  };
+
+  const eliminar = async (): Promise<string | null> => {
+    if (!eliminando || !negocio) return "No hay una cita seleccionada.";
+    const id = eliminando.id;
+    const { data, error } = await supabase.from("citas").delete().eq("id", id).eq("negocio_id", negocio.id).select("id");
+    if (error) return error.message;
+    if (!data || data.length === 0) return "No se eliminó ninguna cita (revisa tus permisos).";
+    setNube((p) => p.filter((x) => x.id !== id));
+    setEliminando(null);
+    setMensaje("Cita eliminada.");
     return null;
   };
 
@@ -251,6 +346,47 @@ export default function App() {
   }
 
   const fechaLarga = new Intl.DateTimeFormat("es-CO", { dateStyle: "full" }).format(new Date());
+
+  let contenido: ReactNode;
+  if (activa === "Inicio") {
+    contenido = <Inicio citasHoy={citasHoy} otrasFechas={otrasFechas} modoNube={modoNube} />;
+  } else if (activa === "Citas") {
+    contenido = modoNube ? (
+      <SeccionCitas
+        citas={nube}
+        cargando={cargandoCitas}
+        error={errorCitas}
+        hoy={hoy}
+        onEditar={(c) => {
+          setEditando(c);
+          setFormAbierto(true);
+        }}
+        onEliminar={(c) => setEliminando(c)}
+        onActualizar={() => void recargarCitas()}
+      />
+    ) : (
+      <section className="proximamente">
+        <h2>Citas</h2>
+        <p>
+          {supabaseConfigurado
+            ? "Inicia sesión para ver y gestionar las citas reales de tu negocio."
+            : "Esta versión no encontró las variables de Supabase, así que no puede mostrar citas reales."}
+        </p>
+        {supabaseConfigurado && (
+          <button className="boton-oro" style={{ marginTop: 16 }} onClick={() => setModoPrueba(false)}>
+            Iniciar sesión
+          </button>
+        )}
+      </section>
+    );
+  } else {
+    contenido = (
+      <section className="proximamente">
+        <h2>{activa}</h2>
+        <p>Esta sección se construirá en un paso posterior.</p>
+      </section>
+    );
+  }
 
   return (
     <div className="app">
@@ -300,24 +436,29 @@ export default function App() {
             <h1>{activa === "Inicio" ? "Buenos días" : activa}</h1>
             <p>{fechaLarga}</p>
           </div>
-          <button className="boton-oro" onClick={() => setFormAbierto(true)}>
+          <button className="boton-oro" onClick={abrirNueva}>
             Nueva cita
           </button>
         </header>
 
-        {activa === "Inicio" ? (
-          <Inicio citasHoy={citasHoy} otrasFechas={otrasFechas} modoNube={modoNube} />
-        ) : (
-          <section className="proximamente">
-            <h2>{activa}</h2>
-            <p>Esta sección se construirá en un paso posterior.</p>
-          </section>
-        )}
+        {contenido}
       </main>
 
       {formAbierto && (
-        <NuevaCita hoy={hoy} existentes={todas} modoNube={modoNube} onGuardar={guardar} onCerrar={() => setFormAbierto(false)} />
+        <FormularioCita
+          hoy={hoy}
+          cita={editando}
+          existentes={modoNube ? nube : todas}
+          profesionales={modoNube ? catProf.map((p) => p.nombre) : profesionales}
+          servicios={modoNube ? catServ.map((s) => ({ nombre: s.nombre, precio: Number(s.precio) })) : servicios}
+          clientes={modoNube ? catCli.map((c) => c.nombre) : []}
+          permitirNuevos={modoNube}
+          nota={modoNube ? AVISO_NUBE : AVISO_LOCAL}
+          onGuardar={(c) => guardar(c, editando ? editando.id : undefined)}
+          onCerrar={cerrarForm}
+        />
       )}
+      {eliminando && <ConfirmarEliminar cita={eliminando} onConfirmar={eliminar} onCancelar={() => setEliminando(null)} />}
       {mensaje && (
         <div className="aviso-flotante" role="status">
           {mensaje}
@@ -543,181 +684,5 @@ function Inicio({ citasHoy, otrasFechas, modoNube }: { citasHoy: Cita[]; otrasFe
         Las citas de ejemplo son ficticias y no se guardan. {modoNube ? AVISO_NUBE : AVISO_LOCAL}
       </p>
     </>
-  );
-}
-
-function Campo({ etiqueta, error, children }: { etiqueta: string; error?: string; children: ReactNode }) {
-  return (
-    <label className={"campo" + (error ? " con-error" : "")}>
-      <span className="etiqueta">{etiqueta}</span>
-      {children}
-      {error && (
-        <span className="error" role="alert">
-          {error}
-        </span>
-      )}
-    </label>
-  );
-}
-
-interface PropsNueva {
-  hoy: string;
-  existentes: Cita[];
-  modoNube: boolean;
-  onGuardar: (c: Omit<Cita, "id">) => Promise<string | null>;
-  onCerrar: () => void;
-}
-
-function NuevaCita({ hoy, existentes, modoNube, onGuardar, onCerrar }: PropsNueva) {
-  const [v, setV] = useState<Formulario>({
-    cliente: "",
-    servicio: "",
-    profesional: "",
-    fecha: hoy,
-    hora: "",
-    precio: "",
-    estado: "Pendiente",
-  });
-  const [errores, setErrores] = useState<Record<string, string>>({});
-  const [enviando, setEnviando] = useState(false);
-  const [errorGuardar, setErrorGuardar] = useState("");
-
-  useEffect(() => {
-    const alTeclear = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCerrar();
-    };
-    window.addEventListener("keydown", alTeclear);
-    return () => window.removeEventListener("keydown", alTeclear);
-  }, [onCerrar]);
-
-  const cambiar = (campo: keyof Formulario, valor: string) =>
-    setV((p) => ({ ...p, [campo]: valor }) as Formulario);
-
-  const elegirServicio = (nombre: string) => {
-    const s = servicios.find((x) => x.nombre === nombre);
-    setV((p) => ({ ...p, servicio: nombre, precio: s ? String(s.precio) : p.precio }));
-  };
-
-  const validar = (): Record<string, string> => {
-    const e: Record<string, string> = {};
-    if (v.cliente.trim().length < 2) e.cliente = "Escribe el nombre del cliente.";
-    if (!v.servicio) e.servicio = "Elige un servicio.";
-    if (!v.profesional) e.profesional = "Elige un profesional.";
-    if (!v.fecha) e.fecha = "Elige la fecha.";
-    if (!v.hora) e.hora = "Elige la hora.";
-    if (!(Number(v.precio) > 0)) e.precio = "Escribe un precio mayor que 0.";
-    if (
-      v.fecha &&
-      v.hora &&
-      v.profesional &&
-      existentes.some((c) => c.fecha === v.fecha && c.hora === v.hora && c.profesional === v.profesional)
-    ) {
-      e.hora = `${v.profesional} ya tiene una cita a esa hora.`;
-    }
-    return e;
-  };
-
-  const enviar = async (ev: FormEvent) => {
-    ev.preventDefault();
-    const err = validar();
-    setErrores(err);
-    setErrorGuardar("");
-    if (Object.keys(err).length > 0) return;
-    setEnviando(true);
-    const fallo = await onGuardar({
-      fecha: v.fecha,
-      hora: v.hora,
-      cliente: v.cliente.trim(),
-      servicio: v.servicio,
-      profesional: v.profesional,
-      precio: Number(v.precio),
-      estado: v.estado,
-    });
-    if (fallo) {
-      setErrorGuardar("No se pudo guardar: " + fallo);
-      setEnviando(false);
-    }
-  };
-
-  return (
-    <div className="modal-fondo">
-      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="titulo-cita">
-        <header className="modal-cabecera">
-          <h2 id="titulo-cita">Nueva cita</h2>
-          <button type="button" className="cerrar" aria-label="Cerrar formulario" onClick={onCerrar}>
-            ✕
-          </button>
-        </header>
-        <p className="nota">{modoNube ? AVISO_NUBE : AVISO_LOCAL}</p>
-
-        <form onSubmit={enviar} noValidate>
-          <Campo etiqueta="Nombre del cliente" error={errores.cliente}>
-            <input type="text" value={v.cliente} onChange={(e) => cambiar("cliente", e.target.value)} placeholder="Ej. Andrés Ramírez" autoComplete="off" />
-          </Campo>
-
-          <div className="fila">
-            <Campo etiqueta="Servicio" error={errores.servicio}>
-              <select value={v.servicio} onChange={(e) => elegirServicio(e.target.value)}>
-                <option value="">Elige un servicio</option>
-                {servicios.map((s) => (
-                  <option key={s.nombre} value={s.nombre}>
-                    {s.nombre}
-                  </option>
-                ))}
-              </select>
-            </Campo>
-            <Campo etiqueta="Profesional" error={errores.profesional}>
-              <select value={v.profesional} onChange={(e) => cambiar("profesional", e.target.value)}>
-                <option value="">Elige un profesional</option>
-                {profesionales.map((p) => (
-                  <option key={p} value={p}>
-                    {p}
-                  </option>
-                ))}
-              </select>
-            </Campo>
-          </div>
-
-          <div className="fila">
-            <Campo etiqueta="Fecha" error={errores.fecha}>
-              <input type="date" value={v.fecha} onChange={(e) => cambiar("fecha", e.target.value)} />
-            </Campo>
-            <Campo etiqueta="Hora" error={errores.hora}>
-              <input type="time" value={v.hora} onChange={(e) => cambiar("hora", e.target.value)} />
-            </Campo>
-          </div>
-
-          <div className="fila">
-            <Campo etiqueta="Precio (COP)" error={errores.precio}>
-              <input type="number" inputMode="numeric" min="0" step="1000" value={v.precio} onChange={(e) => cambiar("precio", e.target.value)} placeholder="Ej. 35000" />
-              {Number(v.precio) > 0 && <span className="ayuda">{cop(Number(v.precio))}</span>}
-            </Campo>
-            <Campo etiqueta="Estado">
-              <select value={v.estado} onChange={(e) => cambiar("estado", e.target.value)}>
-                {estados.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </Campo>
-          </div>
-
-          {errorGuardar && (
-            <p className="error" role="alert">
-              {errorGuardar}
-            </p>
-          )}
-          <div className="acciones">
-            <button type="button" className="boton-borde" onClick={onCerrar}>
-              Cancelar
-            </button>
-            <button type="submit" className="boton-oro" disabled={enviando}>
-              {enviando ? "Guardando…" : "Guardar cita"}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
   );
 }
