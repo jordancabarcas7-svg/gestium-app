@@ -19,6 +19,9 @@ export interface Cita {
 export interface Profesional {
   id: string;
   nombre: string;
+  especialidad?: string | null;
+  activo?: boolean; // si falta, se considera activo
+  creado_en?: string;
 }
 export interface Servicio {
   id: string;
